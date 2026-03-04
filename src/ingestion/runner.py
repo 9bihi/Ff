@@ -3,6 +3,7 @@ import time
 import psycopg2
 import pandas as pd
 from psycopg2.extras import execute_values
+from sqlalchemy import create_engine
 import requests
 from datetime import datetime
 
@@ -24,10 +25,18 @@ def upsert_players(conn, players):
     data = []
     for p in players:
         data.append((
-            p['id'], p['web_name'], p['team'], p['element_type'],
-            p['now_cost'], p['total_points'], p['points_per_game'],
-            p['selected_by_percent'], p['form'], p['goals_scored'],
-            p['assists'], p['clean_sheets']
+            p['id'],
+            p['web_name'],
+            p['team'],          # team_id (integer from FPL)
+            p['element_type'],  # position (1=GKP, 2=DEF, 3=MID, 4=FWD)
+            p['now_cost'],
+            p['total_points'],
+            float(p['points_per_game']),       # FPL returns as string
+            float(p['selected_by_percent']),   # FPL returns as string
+            float(p['form']),                  # FPL returns as string
+            p['goals_scored'],
+            p['assists'],
+            p['clean_sheets']
         ))
     insert_sql = """
         INSERT INTO players (
@@ -52,6 +61,7 @@ def upsert_players(conn, players):
     execute_values(cursor, insert_sql, data)
     conn.commit()
     cursor.close()
+    print(f"Upserted {len(data)} players.")
 
 def upsert_teams(conn, teams):
     cursor = conn.cursor()
@@ -179,7 +189,9 @@ def fetch_and_store_fixtures(conn):
     print("Fixtures updated.")
 
 def update_xg_data(conn):
-    players_df = pd.read_sql("SELECT id, name FROM players", conn)
+    # Use SQLAlchemy engine for pd.read_sql (pandas 2.0+ requirement)
+    engine = create_engine(DATABASE_URL)
+    players_df = pd.read_sql("SELECT id, name FROM players", engine)
     understat_df = fetch_understat_data()
     xg_df = match_understat_to_fpl(understat_df, players_df)
     cursor = conn.cursor()
@@ -198,11 +210,12 @@ def update_xg_data(conn):
     print("xG/xA data updated.")
 
 def compute_team_fdr(conn):
+    engine = create_engine(DATABASE_URL)  # pandas 2.0+ needs SQLAlchemy
     cursor = conn.cursor()
     cursor.execute("SELECT MAX(event) FROM fixtures WHERE finished = true")
     current_gw = cursor.fetchone()[0] or 0
-    next_gws = list(range(current_gw+1, current_gw+6))
-    teams = pd.read_sql("SELECT id FROM teams", conn)
+    next_gws = list(range(current_gw + 1, current_gw + 6))
+    teams = pd.read_sql("SELECT id FROM teams", engine)
     ratings = []
     for _, row in teams.iterrows():
         team_id = row["id"]
@@ -213,7 +226,7 @@ def compute_team_fdr(conn):
             SELECT team_a_difficulty as diff FROM fixtures
             WHERE event IN ({','.join(map(str, next_gws))}) AND team_a = {team_id}
         """
-        diffs = pd.read_sql(query, conn)["diff"].tolist()
+        diffs = pd.read_sql(query, engine)["diff"].tolist()
         avg_fdr = sum(diffs) / len(diffs) if diffs else 3.0
         ratings.append((team_id, avg_fdr))
     for team_id, fdr in ratings:
