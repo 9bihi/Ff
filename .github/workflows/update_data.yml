@@ -8,6 +8,7 @@ on:
 jobs:
   update-db:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -21,9 +22,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Validate secrets
+        run: |
+          if [ -z "${{ secrets.DATABASE_URL }}" ]; then
+            echo "❌ ERROR: DATABASE_URL secret is not set in GitHub repo settings."
+            echo "Go to: Settings → Secrets and variables → Actions → New repository secret"
+            exit 1
+          fi
+          echo "✅ DATABASE_URL secret found."
+
       - name: Run ingestion script
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          PYTHONPATH: .        # critical: makes "from src.ingestion..." work
+          PYTHONPATH: ${{ github.workspace }}
         run: |
-          python src/ingestion/runner.py
+          python -m src.ingestion.runner

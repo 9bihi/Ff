@@ -13,6 +13,11 @@ from src.analysis.metrics import compute_all_metrics
 from src.analysis.recommendations import generate_recommendations
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise EnvironmentError(
+        "DATABASE_URL environment variable is not set. "
+        "Add it as a GitHub Actions secret: Settings → Secrets → Actions → New repository secret"
+    )
 FPL_API_URL = "https://fantasy.premierleague.com/api/bootstrap-static/"
 
 def fetch_fpl_data():
