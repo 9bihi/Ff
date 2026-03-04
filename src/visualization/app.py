@@ -9,12 +9,26 @@ from datetime import datetime
 st.set_page_config(page_title="FPL Analytics", page_icon="⚽", layout="wide")
 
 # Load database URL from secrets
-DATABASE_URL = st.secrets["passwords"]["DATABASE_URL"]
+try:
+    DATABASE_URL = st.secrets["passwords"]["DATABASE_URL"]
+    if DATABASE_URL == "postgresql://user:password@host/dbname" or not DATABASE_URL:
+        raise ValueError("DATABASE_URL is still set to the placeholder value.")
+except (KeyError, ValueError) as e:
+    st.error("⚠️ **Database not configured.** Please add your real `DATABASE_URL` to Streamlit Cloud secrets.")
+    st.info(
+        "Go to **Streamlit Cloud → your app → Settings → Secrets** and add:\n\n"
+        "```toml\n[passwords]\nDATABASE_URL = \"postgresql://USER:PASSWORD@HOST:PORT/DBNAME\"\n```"
+    )
+    st.stop()
 
 # Connection function with caching
 @st.cache_resource
 def init_connection():
-    return psycopg2.connect(DATABASE_URL)
+    try:
+        return psycopg2.connect(DATABASE_URL)
+    except psycopg2.OperationalError as e:
+        st.error(f"❌ **Could not connect to the database.** Please check your `DATABASE_URL` in Streamlit secrets.\n\n`{e}`")
+        st.stop()
 
 conn = init_connection()
 
