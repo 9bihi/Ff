@@ -198,6 +198,11 @@ def update_xg_data(conn):
     engine = create_engine(DATABASE_URL)
     players_df = pd.read_sql("SELECT id, name FROM players", engine)
     understat_df = fetch_understat_data()
+    
+    if understat_df.empty:
+        print("[runner] Skipping XG update — no Understat data.")
+        return
+        
     xg_df = match_understat_to_fpl(understat_df, players_df)
     cursor = conn.cursor()
     for _, row in xg_df.iterrows():

@@ -2,6 +2,9 @@ import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 import re
+import html
+import json
+import time
 from difflib import SequenceMatcher
 
 def fetch_understat_data():
@@ -10,23 +13,51 @@ def fetch_understat_data():
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
-    response = requests.get(url, headers=headers)
-    soup = BeautifulSoup(response.content, "html.parser")
+    
+    for attempt in range(1, 4):
+        try:
+            response = requests.get(url, headers=headers, timeout=15)
+            response.raise_for_status()
 
-    scripts = soup.find_all("script")
-    for script in scripts:
-        if "playersData" in script.text:
-            json_text = re.search(r"playersData\s*=\s*(\[.*?\]);", script.text, re.DOTALL)
-            if json_text:
-                import json
-                data = json.loads(json_text.group(1))
-                df = pd.DataFrame(data)
-                df = df[["player_name", "xG", "xA", "games"]]
-                df["xG"] = pd.to_numeric(df["xG"], errors="coerce")
-                df["xA"] = pd.to_numeric(df["xA"], errors="coerce")
-                df["games"] = pd.to_numeric(df["games"], errors="coerce")
-                return df
-    raise Exception("Could not find player data on Understat page.")
+            match = re.search(
+                r"playersData\s*=\s*JSON\.parse\('(.+?)'\)",
+                response.text,
+                re.DOTALL
+            )
+            if not match:
+                match = re.search(
+                    r"var\s+playersData\s*=\s*(\[.+?\]);",
+                    response.text,
+                    re.DOTALL
+                )
+                if not match:
+                    raise ValueError("playersData not found in page HTML")
+                raw = match.group(1)
+                data = json.loads(raw)
+            else:
+                raw = match.group(1)
+                decoded = html.unescape(
+                    bytes(raw, "utf-8").decode("unicode_escape")
+                )
+                data = json.loads(decoded)
+
+            df = pd.DataFrame(data)
+            if df.empty:
+                raise ValueError("Parsed DataFrame is empty")
+
+            df = df[["player_name", "xG", "xA", "games"]]
+            df["xG"] = pd.to_numeric(df["xG"], errors="coerce")
+            df["xA"] = pd.to_numeric(df["xA"], errors="coerce")
+            df["games"] = pd.to_numeric(df["games"], errors="coerce")
+            return df
+            
+        except Exception as e:
+            print(f"[understat] Attempt {attempt}/3 failed: {e}")
+            if attempt < 3:
+                time.sleep(5)
+
+    print("[understat] WARNING: Returning empty DataFrame. XG data skipped.")
+    return pd.DataFrame()
 
 def match_understat_to_fpl(understat_df, fpl_players_df):
     matches = []
