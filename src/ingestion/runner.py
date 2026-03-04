@@ -47,7 +47,7 @@ def upsert_players(conn, players):
         INSERT INTO players (
             id, name, team_id, position, now_cost, total_points,
             points_per_game, selected_by_percent, form, goals_scored,
-            assists, clean_sheets, updated_at
+            assists, clean_sheets
         ) VALUES %s
         ON CONFLICT (id) DO UPDATE SET
             name = EXCLUDED.name,
@@ -72,7 +72,7 @@ def upsert_teams(conn, teams):
     cursor = conn.cursor()
     data = [(t['id'], t['name'], t['short_name'], t['strength']) for t in teams]
     insert_sql = """
-        INSERT INTO teams (id, name, short_name, strength, updated_at)
+        INSERT INTO teams (id, name, short_name, strength)
         VALUES %s
         ON CONFLICT (id) DO UPDATE SET
             name = EXCLUDED.name,
@@ -88,7 +88,7 @@ def upsert_gameweeks(conn, events):
     cursor = conn.cursor()
     data = [(e['id'], e['name'], e['deadline_time'], e['finished']) for e in events]
     insert_sql = """
-        INSERT INTO gameweeks (id, name, deadline_time, finished, updated_at)
+        INSERT INTO gameweeks (id, name, deadline_time, finished)
         VALUES %s
         ON CONFLICT (id) DO UPDATE SET
             name = EXCLUDED.name,
