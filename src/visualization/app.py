@@ -170,6 +170,28 @@ teams_df = load_teams()
 top_scorers_df = load_top_scorers()
 recs_df = load_recommendations()
 
+# ── Coerce numeric columns ──────────────────────────────────────────────────
+# PostgreSQL TEXT columns and NULL values can come back as object/NaN;
+# force everything to the expected type so sliders and nlargest work correctly.
+_numeric_cols = [
+    'cost', 'total_points', 'points_per_game', 'selected_by',
+    'form', 'goals_scored', 'assists', 'clean_sheets'
+]
+for _col in _numeric_cols:
+    if _col in players_df.columns:
+        players_df[_col] = pd.to_numeric(players_df[_col], errors='coerce')
+
+# Fill remaining NaNs with safe defaults
+players_df['cost']         = players_df['cost'].fillna(0.0)
+players_df['form']         = players_df['form'].fillna(0.0)
+players_df['total_points'] = players_df['total_points'].fillna(0)
+players_df['goals_scored'] = players_df['goals_scored'].fillna(0)
+players_df['assists']      = players_df['assists'].fillna(0)
+players_df['clean_sheets'] = players_df['clean_sheets'].fillna(0)
+players_df['selected_by']  = players_df['selected_by'].fillna(0.0)
+players_df['points_per_game'] = players_df['points_per_game'].fillna(0.0)
+# ────────────────────────────────────────────────────────────────────────────
+
 # Sidebar filters
 st.sidebar.header("🔍 Filters")
 
@@ -182,24 +204,28 @@ teams = ["All"] + sorted(players_df['team'].unique().tolist())
 selected_team = st.sidebar.selectbox("Team", teams)
 
 # Cost range filter
-min_cost = float(players_df['cost'].min())
-max_cost = float(players_df['cost'].max())
+_min_cost = float(players_df['cost'].min()) if players_df['cost'].notna().any() else 0.0
+_max_cost = float(players_df['cost'].max()) if players_df['cost'].notna().any() else 15.0
+if _min_cost == _max_cost:
+    _max_cost = _min_cost + 0.5  # prevent zero-width slider
 cost_range = st.sidebar.slider(
     "Cost (millions)",
-    min_value=min_cost,
-    max_value=max_cost,
-    value=(min_cost, max_cost),
+    min_value=_min_cost,
+    max_value=_max_cost,
+    value=(_min_cost, _max_cost),
     step=0.5
 )
 
 # Form filter
-min_form = float(players_df['form'].min())
-max_form = float(players_df['form'].max())
+_min_form = float(players_df['form'].min()) if players_df['form'].notna().any() else 0.0
+_max_form = float(players_df['form'].max()) if players_df['form'].notna().any() else 10.0
+if _min_form == _max_form:
+    _max_form = _min_form + 0.1
 form_range = st.sidebar.slider(
     "Form",
-    min_value=min_form,
-    max_value=max_form,
-    value=(min_form, max_form),
+    min_value=_min_form,
+    max_value=_max_form,
+    value=(_min_form, _max_form),
     step=0.1
 )
 
