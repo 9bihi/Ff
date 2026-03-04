@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import psycopg2
+from sqlalchemy import create_engine, text
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
@@ -21,16 +21,20 @@ except (KeyError, ValueError) as e:
     )
     st.stop()
 
-# Connection function with caching
+# SQLAlchemy engine with caching (pandas 2.0+ requires SQLAlchemy, not raw psycopg2)
 @st.cache_resource
 def init_connection():
     try:
-        return psycopg2.connect(DATABASE_URL)
-    except psycopg2.OperationalError as e:
+        engine = create_engine(DATABASE_URL)
+        # Test the connection immediately so we catch bad credentials here
+        with engine.connect() as c:
+            c.execute(text("SELECT 1"))
+        return engine
+    except Exception as e:
         st.error(f"❌ **Could not connect to the database.** Please check your `DATABASE_URL` in Streamlit secrets.\n\n`{e}`")
         st.stop()
 
-conn = init_connection()
+engine = init_connection()
 
 # Data loading functions with caching
 @st.cache_data(ttl=3600)
@@ -59,7 +63,7 @@ def load_players():
         JOIN teams t ON p.team_id = t.id
         ORDER BY p.total_points DESC;
     """
-    return pd.read_sql(query, conn)
+    return pd.read_sql(query, engine)
 
 @st.cache_data(ttl=3600)
 def load_teams():
@@ -72,7 +76,7 @@ def load_teams():
         FROM teams
         ORDER BY strength DESC;
     """
-    return pd.read_sql(query, conn)
+    return pd.read_sql(query, engine)
 
 @st.cache_data(ttl=3600)
 def load_top_scorers():
@@ -89,7 +93,7 @@ def load_top_scorers():
         ORDER BY p.goals_scored DESC
         LIMIT 20;
     """
-    return pd.read_sql(query, conn)
+    return pd.read_sql(query, engine)
 
 @st.cache_data(ttl=3600)
 def load_recommendations():
@@ -121,7 +125,7 @@ def load_recommendations():
             END,
             r.confidence DESC;
     """
-    return pd.read_sql(query, conn)
+    return pd.read_sql(query, engine)
 
 @st.cache_data(ttl=3600)
 def get_next_deadline():
@@ -132,7 +136,7 @@ def get_next_deadline():
         ORDER BY id ASC
         LIMIT 1
     """
-    df = pd.read_sql(query, conn)
+    df = pd.read_sql(query, engine)
     if not df.empty:
         return pd.to_datetime(df.iloc[0,0])
     return None
