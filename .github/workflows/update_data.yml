@@ -22,18 +22,36 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Validate secrets
+      - name: Debug — verify imports and secrets
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
-          if [ -z "${{ secrets.DATABASE_URL }}" ]; then
-            echo "❌ ERROR: DATABASE_URL secret is not set in GitHub repo settings."
-            echo "Go to: Settings → Secrets and variables → Actions → New repository secret"
+          echo "=== Python version ==="
+          python --version
+          echo "=== Installed packages ==="
+          pip list | grep -E "psycopg2|sqlalchemy|pandas|requests|beautifulsoup4|lxml"
+          echo "=== Test imports ==="
+          python -c "
+          import sys, os
+          sys.path.insert(0, os.getcwd())
+          print('psycopg2:', end=' '); import psycopg2; print('OK')
+          print('sqlalchemy:', end=' '); import sqlalchemy; print('OK')
+          print('pandas:', end=' '); import pandas; print('OK')
+          print('bs4:', end=' '); import bs4; print('OK')
+          print('requests:', end=' '); import requests; print('OK')
+          print('src.ingestion.runner:', end=' ')
+          from src.ingestion.runner import main; print('OK')
+          "
+          echo "=== DATABASE_URL set? ==="
+          if [ -z "$DATABASE_URL" ]; then
+            echo "ERROR: DATABASE_URL is empty!"
             exit 1
+          else
+            echo "YES (length=${#DATABASE_URL})"
           fi
-          echo "✅ DATABASE_URL secret found."
 
       - name: Run ingestion script
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          PYTHONPATH: ${{ github.workspace }}
         run: |
-          python -m src.ingestion.runner
+          python run_ingestion.py
