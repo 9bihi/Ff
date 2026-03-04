@@ -2,6 +2,8 @@ import os
 import time
 import psycopg2
 import pandas as pd
+import numpy as np
+import psycopg2.extensions as ext
 from psycopg2.extras import execute_values
 from sqlalchemy import create_engine
 import requests
@@ -12,6 +14,14 @@ from src.ingestion.understat import fetch_understat_data, match_understat_to_fpl
 from src.analysis.metrics import compute_all_metrics
 from src.analysis.recommendations import generate_recommendations
 
+# Global psycopg2 adapters for numpy types (Phase 2)
+# Registering these globally allows psycopg2 to handle numpy types natively
+ext.register_adapter(np.int64,   lambda v: ext.AsIs(int(v)))
+ext.register_adapter(np.int32,   lambda v: ext.AsIs(int(v)))
+ext.register_adapter(np.float64, lambda v: ext.AsIs(float(v)))
+ext.register_adapter(np.float32, lambda v: ext.AsIs(float(v)))
+ext.register_adapter(np.bool_,   lambda v: ext.AsIs(bool(v)))
+
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise EnvironmentError(
@@ -19,6 +29,18 @@ if not DATABASE_URL:
         "Add it as a GitHub Actions secret: Settings → Secrets → Actions → New repository secret"
     )
 FPL_API_URL = "https://fantasy.premierleague.com/api/bootstrap-static/"
+
+def sanitize(val):
+    """Convert numpy scalars to native Python types (Phase 3)."""
+    if isinstance(val, (np.integer,)):   return int(val)
+    if isinstance(val, (np.floating,)):  return float(val)
+    if isinstance(val, (np.bool_,)):     return bool(val)
+    if isinstance(val, (np.ndarray,)):   return val.tolist()
+    return val
+
+def sanitize_row(row: dict) -> dict:
+    """Sanitize all values in a dictionary."""
+    return {k: sanitize(v) for k, v in row.items()}
 
 def fetch_fpl_data():
     response = requests.get(FPL_API_URL)
@@ -63,7 +85,7 @@ def upsert_players(conn, players):
             clean_sheets = EXCLUDED.clean_sheets,
             updated_at = CURRENT_TIMESTAMP;
     """
-    execute_values(cursor, insert_sql, data)
+    execute_values(cursor, insert_sql, [tuple(sanitize(v) for v in row) for row in data])
     conn.commit()
     cursor.close()
     print(f"Upserted {len(data)} players.")
@@ -80,7 +102,7 @@ def upsert_teams(conn, teams):
             strength = EXCLUDED.strength,
             updated_at = CURRENT_TIMESTAMP;
     """
-    execute_values(cursor, insert_sql, data)
+    execute_values(cursor, insert_sql, [tuple(sanitize(v) for v in row) for row in data])
     conn.commit()
     cursor.close()
 
@@ -96,7 +118,7 @@ def upsert_gameweeks(conn, events):
             finished = EXCLUDED.finished,
             updated_at = CURRENT_TIMESTAMP;
     """
-    execute_values(cursor, insert_sql, data)
+    execute_values(cursor, insert_sql, [tuple(sanitize(v) for v in row) for row in data])
     conn.commit()
     cursor.close()
     print("Gameweeks updated.")
@@ -116,6 +138,7 @@ def update_player_history(conn):
         try:
             history = fetch_player_history(pid)
             for gw in history:
+                r = sanitize_row(gw)
                 cursor.execute("""
                     INSERT INTO player_history (
                         player_id, gameweek, minutes, goals_scored, assists,
@@ -149,12 +172,12 @@ def update_player_history(conn):
                         in_dreamteam = EXCLUDED.in_dreamteam,
                         updated_at = CURRENT_TIMESTAMP;
                 """, (
-                    pid, gw["round"], gw["minutes"], gw["goals_scored"],
-                    gw["assists"], gw["clean_sheets"], gw["goals_conceded"],
-                    gw["own_goals"], gw["penalties_saved"], gw["penalties_missed"],
-                    gw["yellow_cards"], gw["red_cards"], gw["saves"], gw["bonus"],
-                    gw["bps"], gw["influence"], gw["creativity"], gw["threat"],
-                    gw["ict_index"], gw["total_points"], gw.get("in_dreamteam", False)
+                    pid, r["round"], r["minutes"], r["goals_scored"],
+                    r["assists"], r["clean_sheets"], r["goals_conceded"],
+                    r["own_goals"], r["penalties_saved"], r["penalties_missed"],
+                    r["yellow_cards"], r["red_cards"], r["saves"], r["bonus"],
+                    r["bps"], r["influence"], r["creativity"], r["threat"],
+                    r["ict_index"], r["total_points"], r.get("in_dreamteam", False)
                 ))
             conn.commit()
             print(f"Updated history for player {pid}")
@@ -171,6 +194,7 @@ def fetch_and_store_fixtures(conn):
     fixtures = response.json()
     cursor = conn.cursor()
     for f in fixtures:
+        r = sanitize_row(f)
         cursor.execute("""
             INSERT INTO fixtures (id, event, team_h, team_a, team_h_difficulty,
                                   team_a_difficulty, finished, kickoff_time, updated_at)
@@ -185,9 +209,9 @@ def fetch_and_store_fixtures(conn):
                 kickoff_time = EXCLUDED.kickoff_time,
                 updated_at = CURRENT_TIMESTAMP;
         """, (
-            f["id"], f.get("event"), f["team_h"], f["team_a"],
-            f["team_h_difficulty"], f["team_a_difficulty"],
-            f["finished"], f["kickoff_time"]
+            r["id"], r.get("event"), r["team_h"], r["team_a"],
+            r["team_h_difficulty"], r["team_a_difficulty"],
+            r["finished"], r["kickoff_time"]
         ))
     conn.commit()
     cursor.close()
@@ -206,6 +230,7 @@ def update_xg_data(conn):
     xg_df = match_understat_to_fpl(understat_df, players_df)
     cursor = conn.cursor()
     for _, row in xg_df.iterrows():
+        r = sanitize_row(row.to_dict())
         cursor.execute("""
             INSERT INTO player_xg (player_id, xG, xA, games_understat, updated_at)
             VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
@@ -214,7 +239,7 @@ def update_xg_data(conn):
                 xA = EXCLUDED.xA,
                 games_understat = EXCLUDED.games_understat,
                 updated_at = CURRENT_TIMESTAMP;
-        """, (row["player_id"], row["xG"], row["xA"], row["games_understat"]))
+        """, (r["player_id"], r["xG"], r["xA"], r["games_understat"]))
     conn.commit()
     cursor.close()
     print("xG/xA data updated.")
@@ -246,7 +271,7 @@ def compute_team_fdr(conn):
             ON CONFLICT (team_id) DO UPDATE SET
                 next_5_fdr = EXCLUDED.next_5_fdr,
                 updated_at = CURRENT_TIMESTAMP;
-        """, (team_id, fdr))
+        """, (sanitize(team_id), sanitize(fdr)))
     conn.commit()
     cursor.close()
     print("Team FDR updated.")
@@ -255,6 +280,7 @@ def store_metrics(conn):
     metrics_df = compute_all_metrics(conn)
     cursor = conn.cursor()
     for _, row in metrics_df.iterrows():
+        r = sanitize_row(row.to_dict())
         cursor.execute("""
             INSERT INTO player_metrics (player_id, ppm, form, minutes_stability, updated_at)
             VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
@@ -263,7 +289,7 @@ def store_metrics(conn):
                 form = EXCLUDED.form,
                 minutes_stability = EXCLUDED.minutes_stability,
                 updated_at = CURRENT_TIMESTAMP;
-        """, (row["player_id"], row["ppm"], row["form"], row["minutes_stability"]))
+        """, (r["player_id"], r["ppm"], r["form"], r["minutes_stability"]))
     conn.commit()
     cursor.close()
     print("Player metrics stored.")
@@ -272,6 +298,7 @@ def store_recommendations(conn):
     recs_df = generate_recommendations(conn)
     cursor = conn.cursor()
     for _, row in recs_df.iterrows():
+        r = sanitize_row(row.to_dict())
         cursor.execute("""
             INSERT INTO recommendations (player_id, recommendation, confidence, reasons, fdr_next_5, updated_at)
             VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
@@ -281,7 +308,7 @@ def store_recommendations(conn):
                 reasons = EXCLUDED.reasons,
                 fdr_next_5 = EXCLUDED.fdr_next_5,
                 updated_at = CURRENT_TIMESTAMP;
-        """, (row["player_id"], row["recommendation"], row["confidence"], row["reasons"], row["fdr_next_5"]))
+        """, (r["player_id"], r["recommendation"], r["confidence"], r["reasons"], r["fdr_next_5"]))
     conn.commit()
     cursor.close()
     print("Recommendations stored.")
